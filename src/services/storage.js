@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, sanitizedUrl } from '../lib/supabase';
 
 const LOCAL_STORAGE_KEY = 'habit_tracker_master_db';
 
@@ -20,7 +20,6 @@ export function saveLocalRecords(records) {
   }
 }
 
-// Загрузка из базы с возвратом статуса ошибки
 export async function syncWithCloud() {
   const local = getLocalRecords();
   if (!isSupabaseConfigured) {
@@ -55,7 +54,6 @@ export async function syncWithCloud() {
   return { data: local, error: null };
 }
 
-// Сохранение дня с возвратом ошибки, если Supabase отклонил запись
 export async function persistDayRecord(dateStr, record) {
   const all = getLocalRecords();
   all[dateStr] = record;
@@ -92,15 +90,17 @@ export async function persistDayRecord(dateStr, record) {
   }
 }
 
-// Диагностический тест соединения
+// Диагностический тест соединения с выводом деталей
 export async function testSupabaseConnection() {
   if (!isSupabaseConfigured) {
-    return { success: false, message: 'Ключи Supabase отсутствуют в сборке (VITE_SUPABASE_URL)' };
+    return { 
+      success: false, 
+      message: `Ключи Supabase не обнаружены в текущей сборке.\nURL: "${sanitizedUrl}"` 
+    };
   }
 
   try {
     const testDate = '1970-01-01';
-    // Пробуем тестовую запись
     const { error: insertError } = await supabase.from('habit_logs').upsert({
       date: testDate,
       sport: { test: true },
@@ -109,19 +109,27 @@ export async function testSupabaseConnection() {
     });
 
     if (insertError) {
-      return { success: false, message: `Ошибка записи: ${insertError.message}` };
+      return { 
+        success: false, 
+        message: `Ошибка базы: ${insertError.message}\n(Код: ${insertError.code || 'PGRST'})\nИспользуемый URL: ${sanitizedUrl}` 
+      };
     }
 
-    // Удаляем тестовую строку
+    // Удаляем тестовую запись
     await supabase.from('habit_logs').delete().eq('date', testDate);
 
-    return { success: true, message: 'Связь с базой идеальна! Чтение и запись работают.' };
+    return { 
+      success: true, 
+      message: `Связь с базой идеальна! Чтение и запись работают.\nURL: ${sanitizedUrl}` 
+    };
   } catch (err) {
-    return { success: false, message: `Сбой подключения: ${err.message}` };
+    return { 
+      success: false, 
+      message: `Сетевой сбой: ${err.message}\nИспользуемый URL: ${sanitizedUrl}` 
+    };
   }
 }
 
-// Realtime подписка
 export function subscribeToHabitChanges(onRemoteChange) {
   if (!isSupabaseConfigured) return () => {};
 
