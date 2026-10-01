@@ -2,9 +2,8 @@ name: Deploy Habit Tracker to GitHub Pages
 
 on:
   push:
-    branches: ['main'] # Запускать при каждом push в ветку main
+    branches: ['main']
 
-# Разрешения для публикации на GitHub Pages
 permissions:
   contents: read
   pages: write
@@ -27,15 +26,13 @@ jobs:
       - name: Установка Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
+          node-version: 22
 
       - name: Установка зависимостей
-        run: npm ci
+        run: npm install
 
       - name: Сборка проекта
         env:
-          # Переменные окружения Supabase передаются на этапе сборки
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
@@ -43,7 +40,7 @@ jobs:
       - name: Настройка GitHub Pages
         uses: actions/configure-pages@v4
 
-      - name: Загрузка артефактов сборки
+      - name: Загрузка артефактов
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
