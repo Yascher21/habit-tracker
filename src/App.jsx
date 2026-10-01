@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Dumbbell, BookOpen, Brain, Zap, Moon, Utensils, 
   ChevronLeft, ChevronRight, Calendar, BarChart3, 
@@ -10,7 +10,7 @@ import {
 } from './utils/habitRules';
 import { 
   getLocalRecords, saveLocalRecords, 
-  fetchAllRecords, persistDayRecord 
+  syncWithCloud, persistDayRecord, subscribeToHabitChanges
 } from './services/storage';
 import { isSupabaseConfigured } from './lib/supabase';
 
@@ -24,23 +24,47 @@ const habitIcons = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('input'); // 'input' | 'grid' | 'stats'
+  const [activeTab, setActiveTab] = useState('input');
   const [records, setRecords] = useState(getLocalRecords());
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [cloudStatus, setCloudStatus] = useState(isSupabaseConfigured ? 'connected' : 'local');
+  const [isSyncing, setIsSyncing] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Инициализация данных
-  useEffect(() => {
-    fetchAllRecords().then(data => {
-      if (data) setRecords(data);
-    });
+  // Функция принудительной синхронизации
+  const handleManualSync = useCallback(async () => {
+    setIsSyncing(true);
+    const fresh = await syncWithCloud();
+    if (fresh) setRecords(fresh);
+    setTimeout(() => setIsSyncing(false), 500);
   }, []);
 
-  // Текущий месяц для сетки и аналитики
+  // Первичная загрузка, подписка на Realtime и фокус вкладки
+  useEffect(() => {
+    handleManualSync();
+
+    // Подписка на живые изменения из базы данных
+    const unsubscribe = subscribeToHabitChanges((updatedRecords) => {
+      setRecords(updatedRecords);
+    });
+
+    // Авто-проверка при возвращении в приложение / разблокировке
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleManualSync();
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleManualSync);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleManualSync);
+    };
+  }, [handleManualSync]);
+
   const [currentYearMonth, setCurrentYearMonth] = useState(() => selectedDate.slice(0, 7));
 
-  // Данные выбранного дня
   const currentDayData = useMemo(() => {
     return records[selectedDate] || {
       sport: { steps: '', runKm: '', workoutMin: '', cyclingKm: '' },
@@ -59,7 +83,6 @@ export default function App() {
     setFormData(currentDayData);
   }, [currentDayData, selectedDate]);
 
-  // Живой подсчет оценок для формы ввода
   const computedScores = useMemo(() => {
     return evaluateAllScores(formData);
   }, [formData]);
@@ -85,7 +108,6 @@ export default function App() {
     setTimeout(() => setSaveSuccess(false), 2000);
   };
 
-  // Месячные вычисления для Сетки и Статистики
   const daysInCurrentMonth = useMemo(() => {
     const [year, month] = currentYearMonth.split('-').map(Number);
     return new Date(year, month, 0).getDate();
@@ -105,7 +127,6 @@ export default function App() {
     return res;
   }, [records, currentYearMonth, daysInCurrentMonth]);
 
-  // Экспорт данных в JSON
   const handleExportJSON = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(records, null, 2));
     const dlAnchor = document.createElement('a');
@@ -114,25 +135,27 @@ export default function App() {
     dlAnchor.click();
   };
 
-  // Импорт данных из JSON
   const handleImportJSON = (e) => {
     const fileReader = new FileReader();
     fileReader.readAsText(e.target.files[0], "UTF-8");
-    fileReader.onload = (event) => {
+    fileReader.onload = async (event) => {
       try {
         const imported = JSON.parse(event.target.result);
         saveLocalRecords(imported);
         setRecords(imported);
-        alert('Данные успешно импортированы!');
+        // Загрузка импортированных дней в облако
+        for (const [dateStr, rec] of Object.entries(imported)) {
+          await persistDayRecord(dateStr, rec);
+        }
+        alert('Данные импортированы и сохранены!');
       } catch (err) {
-        alert('Ошибка при чтении файла');
+        alert('Ошибка при чтении файла бэкапа');
       }
     };
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Верхняя панель */}
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-4 py-3">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -141,14 +164,24 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-base font-semibold leading-tight">Трекер привычек</h1>
-              <p className="text-xs text-slate-400 flex items-center gap-1.5">
-                <span className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                {cloudStatus === 'connected' ? 'Облако Supabase активно' : 'Локальный режим'}
-              </p>
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${isSupabaseConfigured ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                <span className="text-xs text-slate-400">
+                  {isSupabaseConfigured ? 'Облако активно' : 'Локальный режим'}
+                </span>
+                {isSupabaseConfigured && (
+                  <button 
+                    onClick={handleManualSync}
+                    title="Синхронизировать сейчас"
+                    className="p-1 text-slate-400 hover:text-sky-400 transition"
+                  >
+                    <RefreshCw size={12} className={isSyncing ? 'animate-spin text-sky-400' : ''} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Навигация */}
           <nav className="flex bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-sm">
             <button
               onClick={() => setActiveTab('input')}
@@ -175,12 +208,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* Основной контент */}
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6">
-        {/* ===================== ТАБ 1: ЗАПИСЬ ДНЯ ===================== */}
         {activeTab === 'input' && (
           <div className="space-y-6">
-            {/* Панель выбора даты */}
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
               <button 
                 onClick={() => {
@@ -210,9 +240,8 @@ export default function App() {
               </button>
             </div>
 
-            {/* Карточки привычек */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* 1. Спорт */}
+              {/* Спорт */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -268,7 +297,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 2. Чтение */}
+              {/* Чтение */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -303,7 +332,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 3. Саморазвитие */}
+              {/* Саморазвитие */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -326,7 +355,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 4. Зарядка */}
+              {/* Зарядка */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -361,7 +390,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 5. Режим сна */}
+              {/* Режим сна */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -396,7 +425,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 6. Питание */}
+              {/* Питание */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -442,7 +471,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Кнопка сохранения */}
             <button
               onClick={handleSaveDay}
               className="w-full py-3.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20 active:scale-[0.99] transition"
@@ -450,7 +478,7 @@ export default function App() {
               {saveSuccess ? (
                 <>
                   <Check size={20} className="stroke-[3]" />
-                  <span>Сохранено!</span>
+                  <span>Сохранено в облако!</span>
                 </>
               ) : (
                 <span>Зафиксировать день</span>
@@ -459,7 +487,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ===================== ТАБ 2: МЕСЯЧНАЯ СЕТКА ===================== */}
         {activeTab === 'grid' && (
           <div className="space-y-4">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
@@ -532,7 +559,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ===================== ТАБ 3: СТАТИСТИКА ===================== */}
         {activeTab === 'stats' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
@@ -545,7 +571,6 @@ export default function App() {
               <span className="text-xs text-slate-400">Формула из «Трекер активностей 2»</span>
             </div>
 
-            {/* Карточки метрик */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {HABITS_CONFIG.map(habit => {
                 const stat = monthStats[habit.id];
@@ -564,7 +589,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Полоса распределения цветов */}
                     <div className="w-full h-3 bg-slate-800 rounded-full flex overflow-hidden">
                       {[0, 1, 2, 3, 4].map(score => (
                         <div 
@@ -576,7 +600,6 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* Табличная разбивка по цветам */}
                     <div className="grid grid-cols-5 gap-1 text-[11px] text-center pt-1 border-t border-slate-800/80">
                       {[0, 1, 2, 3, 4].map(score => (
                         <div key={score} className="space-y-0.5">
@@ -597,11 +620,10 @@ export default function App() {
               })}
             </div>
 
-            {/* Блок бэкапа и резервной копии */}
             <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 text-slate-400">
                 <Database size={16} />
-                <span>Хранение: LocalStorage + Supabase</span>
+                <span>Хранилище: LocalStorage + Supabase Cloud</span>
               </div>
               <div className="flex items-center gap-2">
                 <button 

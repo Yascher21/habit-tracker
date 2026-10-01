@@ -20,14 +20,15 @@ export function saveLocalRecords(records) {
   }
 }
 
-export async function fetchAllRecords() {
+// Загрузка всех записей из Supabase и слияние с локальными
+export async function syncWithCloud() {
   const local = getLocalRecords();
   if (!isSupabaseConfigured) return local;
 
   try {
     const { data, error } = await supabase.from('habit_logs').select('*');
     if (error) throw error;
-    if (data && data.length > 0) {
+    if (data) {
       const merged = { ...local };
       data.forEach(row => {
         merged[row.date] = {
@@ -44,11 +45,12 @@ export async function fetchAllRecords() {
       return merged;
     }
   } catch (e) {
-    console.warn('Работаем в офлайн-режиме LocalStorage:', e.message);
+    console.warn('Сбой облачной синхронизации:', e.message);
   }
   return local;
 }
 
+// Сохранение записи
 export async function persistDayRecord(dateStr, record) {
   const all = getLocalRecords();
   all[dateStr] = record;
@@ -56,7 +58,7 @@ export async function persistDayRecord(dateStr, record) {
 
   if (isSupabaseConfigured) {
     try {
-      await supabase.from('habit_logs').upsert({
+      const { error } = await supabase.from('habit_logs').upsert({
         date: dateStr,
         sport: record.sport || {},
         reading: record.reading || {},
@@ -67,9 +69,45 @@ export async function persistDayRecord(dateStr, record) {
         scores: record.scores || {},
         updated_at: new Date().toISOString(),
       }, { onConflict: 'date' });
+
+      if (error) console.error('Ошибка отправки в Supabase:', error.message);
     } catch (e) {
-      console.warn('Синхронизация с облаком отложена:', e);
+      console.warn('Офлайн-режим, сохранено только локально:', e);
     }
   }
   return all;
+}
+
+// Подписка на обновления в реальном времени (WebSockets)
+export function subscribeToHabitChanges(onRemoteChange) {
+  if (!isSupabaseConfigured) return () => {};
+
+  const channel = supabase
+    .channel('realtime_habit_logs')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'habit_logs' },
+      (payload) => {
+        if (payload.new && payload.new.date) {
+          const updatedRow = payload.new;
+          const currentLocal = getLocalRecords();
+          currentLocal[updatedRow.date] = {
+            sport: updatedRow.sport || {},
+            reading: updatedRow.reading || {},
+            self_dev: updatedRow.self_dev || {},
+            exercise: updatedRow.exercise || {},
+            sleep: updatedRow.sleep || {},
+            nutrition: updatedRow.nutrition || {},
+            scores: updatedRow.scores || {},
+          };
+          saveLocalRecords(currentLocal);
+          onRemoteChange({ ...currentLocal });
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
