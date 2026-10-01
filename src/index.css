@@ -8,3 +8,15 @@ body {
   -webkit-tap-highlight-color: transparent;
   background-color: #090d16;
 }
+
+/* Растягиваем нативный значок календаря/часов на всё поле, 
+   чтобы клик в любую точку открывал виджет выбора */
+.clickable-picker::-webkit-calendar-picker-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}

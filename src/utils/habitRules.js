@@ -136,24 +136,48 @@ export function evaluateAllScores(dayData = {}) {
 }
 
 // Формула листа «Трекер активностей 2»
-export function calculateMonthlyHabitStats(daysInMonth, scoresArray) {
+export function calculateMonthlyHabitStats(effectiveDays, scoresArray, totalDaysInMonth, isCurrentMonth) {
   const counts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
-  scoresArray.forEach(val => {
+
+  // Если будущий месяц еще не наступил
+  if (effectiveDays <= 0) {
+    return {
+      counts,
+      percentages: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 },
+      average: 0,
+      effectiveDays: 0,
+      totalDays: totalDaysInMonth,
+      isCurrentMonth: false,
+    };
+  }
+
+  // Учитываем оценки только за реально прожитые дни (от 1 до effectiveDays)
+  const daysToCount = scoresArray.slice(0, effectiveDays);
+  daysToCount.forEach(val => {
     const s = Number(val);
     if (counts[s] !== undefined) counts[s] += 1;
     else counts[0] += 1;
   });
 
+  // Проценты распределения считаем от фактически прожитых дней
   const percentages = {
-    0: (counts[0] / daysInMonth) * 100,
-    1: (counts[1] / daysInMonth) * 100,
-    2: (counts[2] / daysInMonth) * 100,
-    3: (counts[3] / daysInMonth) * 100,
-    4: (counts[4] / daysInMonth) * 100,
+    0: (counts[0] / effectiveDays) * 100,
+    1: (counts[1] / effectiveDays) * 100,
+    2: (counts[2] / effectiveDays) * 100,
+    3: (counts[3] / effectiveDays) * 100,
+    4: (counts[4] / effectiveDays) * 100,
   };
 
+  // Средний балл: делим на количество прошедших дней
   const weightedSum = counts[1] * 1 + counts[2] * 2 + counts[3] * 3 + counts[4] * 4;
-  const average = weightedSum / daysInMonth;
+  const average = weightedSum / effectiveDays;
 
-  return { counts, percentages, average };
+  return {
+    counts,
+    percentages,
+    average,
+    effectiveDays,
+    totalDays: totalDaysInMonth,
+    isCurrentMonth,
+  };
 }

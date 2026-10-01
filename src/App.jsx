@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Dumbbell, BookOpen, Brain, Zap, Moon, Utensils, 
   ChevronLeft, ChevronRight, Calendar, BarChart3, 
-  Edit3, Check, Download, Upload, Database, RefreshCw, AlertCircle
+  Edit3, Check, Download, Upload, Database, RefreshCw, AlertCircle, Clock
 } from 'lucide-react';
 import { 
   HABITS_CONFIG, SCORE_LEVELS, evaluateAllScores, 
@@ -23,6 +23,28 @@ const habitIcons = {
   sleep: Moon,
   nutrition: Utensils,
 };
+
+// Вспомогательные функции для форматирования дат на русском языке
+function formatDisplayDate(dateStr) {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+}
+
+function formatDisplayMonth(yearMonthStr) {
+  if (!yearMonthStr) return '';
+  const [y, m] = yearMonthStr.split('-').map(Number);
+  const date = new Date(y, m - 1, 1);
+  return date.toLocaleDateString('ru-RU', {
+    month: 'long',
+    year: 'numeric'
+  });
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('input');
@@ -112,7 +134,7 @@ export default function App() {
       setErrorMessage(error);
     } else {
       setErrorMessage(null);
-      setStatusNotification('Успешно сохранено в облако Supabase!');
+      setStatusNotification('Успешно сохранено в облако!');
       setTimeout(() => setStatusNotification(null), 2500);
     }
   };
@@ -133,8 +155,24 @@ export default function App() {
     return new Date(year, month, 0).getDate();
   }, [currentYearMonth]);
 
-  const monthStats = useMemo(() => {
-    const res = {};
+  // ДИНАМИЧЕСКИЙ РАСЧЕТ СТАТИСТИКИ
+  const monthStatsData = useMemo(() => {
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const todayYearMonth = todayStr.slice(0, 7);
+    const todayDay = today.getDate();
+
+    let effectiveDays = daysInCurrentMonth;
+    let isCurrentMonth = false;
+
+    if (currentYearMonth === todayYearMonth) {
+      effectiveDays = todayDay; // 1-го октября = 1, 2-го = 2 и т.д.
+      isCurrentMonth = true;
+    } else if (currentYearMonth > todayYearMonth) {
+      effectiveDays = 0; // Будущий месяц
+    }
+
+    const stats = {};
     HABITS_CONFIG.forEach(habit => {
       const scoresArray = [];
       for (let day = 1; day <= daysInCurrentMonth; day++) {
@@ -142,9 +180,15 @@ export default function App() {
         const dayRec = records[dStr];
         scoresArray.push(dayRec?.scores?.[habit.id] ?? 0);
       }
-      res[habit.id] = calculateMonthlyHabitStats(daysInCurrentMonth, scoresArray);
+      stats[habit.id] = calculateMonthlyHabitStats(
+        effectiveDays, 
+        scoresArray, 
+        daysInCurrentMonth, 
+        isCurrentMonth
+      );
     });
-    return res;
+
+    return { stats, effectiveDays, isCurrentMonth };
   }, [records, currentYearMonth, daysInCurrentMonth]);
 
   const handleExportJSON = () => {
@@ -168,7 +212,7 @@ export default function App() {
         }
         alert('Данные импортированы!');
       } catch (err) {
-        alert('Ошибка файла');
+        alert('Ошибка при чтении файла');
       }
     };
   };
@@ -178,7 +222,6 @@ export default function App() {
       {/* Шапка с адаптивным переносом навигации на мобильных */}
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-4 py-3">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          {/* Верхняя строка: Логотип + Статус облака */}
           <div className="flex items-center justify-between w-full sm:w-auto">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 font-bold shrink-0">
@@ -205,37 +248,24 @@ export default function App() {
             </div>
           </div>
 
-          {/* Вторая строка на телефоне (3 равные колонки) / одна строка на ПК */}
           <nav className="grid grid-cols-3 sm:flex w-full sm:w-auto bg-slate-800/80 p-1 rounded-xl border border-slate-700/60 text-sm">
             <button
               onClick={() => setActiveTab('input')}
-              className={`flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg transition ${
-                activeTab === 'input' 
-                  ? 'bg-sky-500 text-white font-medium shadow' 
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg transition ${activeTab === 'input' ? 'bg-sky-500 text-white font-medium shadow' : 'text-slate-400 hover:text-slate-200'}`}
             >
               <Edit3 size={15} />
               <span>Запись</span>
             </button>
             <button
               onClick={() => setActiveTab('grid')}
-              className={`flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg transition ${
-                activeTab === 'grid' 
-                  ? 'bg-sky-500 text-white font-medium shadow' 
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg transition ${activeTab === 'grid' ? 'bg-sky-500 text-white font-medium shadow' : 'text-slate-400 hover:text-slate-200'}`}
             >
               <Calendar size={15} />
               <span>Сетка</span>
             </button>
             <button
               onClick={() => setActiveTab('stats')}
-              className={`flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg transition ${
-                activeTab === 'stats' 
-                  ? 'bg-sky-500 text-white font-medium shadow' 
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg transition ${activeTab === 'stats' ? 'bg-sky-500 text-white font-medium shadow' : 'text-slate-400 hover:text-slate-200'}`}
             >
               <BarChart3 size={15} />
               <span>Статистика</span>
@@ -270,9 +300,10 @@ export default function App() {
       </div>
 
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6">
-        {/* Экран 1: Ввод */}
+        {/* ===================== ТАБ 1: ЗАПИСЬ ДНЯ ===================== */}
         {activeTab === 'input' && (
           <div className="space-y-6">
+            {/* Панель выбора даты — клик в любое место открывает календарь */}
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
               <button 
                 onClick={() => {
@@ -284,12 +315,21 @@ export default function App() {
               >
                 <ChevronLeft size={20} />
               </button>
-              <input 
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-center font-semibold text-base sm:text-lg focus:outline-none cursor-pointer"
-              />
+
+              <div className="relative flex-1 flex items-center justify-center cursor-pointer group">
+                <div className="flex items-center gap-2 font-semibold text-base sm:text-lg text-slate-100 group-hover:text-sky-400 transition pointer-events-none">
+                  <Calendar size={18} className="text-sky-400" />
+                  <span>{formatDisplayDate(selectedDate)}</span>
+                </div>
+                <input 
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer clickable-picker"
+                />
+              </div>
+
               <button 
                 onClick={() => {
                   const d = new Date(selectedDate);
@@ -302,6 +342,7 @@ export default function App() {
               </button>
             </div>
 
+            {/* Карточки привычек — без цифр в скобках */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Спорт */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
@@ -311,7 +352,7 @@ export default function App() {
                     <span className="font-medium">Спорт</span>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${SCORE_LEVELS[computedScores.sport].bg} text-slate-950`}>
-                    {SCORE_LEVELS[computedScores.sport].label} ({computedScores.sport})
+                    {SCORE_LEVELS[computedScores.sport].label}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
@@ -367,7 +408,7 @@ export default function App() {
                     <span className="font-medium">Чтение</span>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${SCORE_LEVELS[computedScores.reading].bg} text-slate-950`}>
-                    {SCORE_LEVELS[computedScores.reading].label} ({computedScores.reading})
+                    {SCORE_LEVELS[computedScores.reading].label}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
@@ -402,7 +443,7 @@ export default function App() {
                     <span className="font-medium">Саморазвитие</span>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${SCORE_LEVELS[computedScores.self_dev].bg} text-slate-950`}>
-                    {SCORE_LEVELS[computedScores.self_dev].label} ({computedScores.self_dev})
+                    {SCORE_LEVELS[computedScores.self_dev].label}
                   </span>
                 </div>
                 <div className="text-xs">
@@ -425,7 +466,7 @@ export default function App() {
                     <span className="font-medium">Зарядка</span>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${SCORE_LEVELS[computedScores.exercise].bg} text-slate-950`}>
-                    {SCORE_LEVELS[computedScores.exercise].label} ({computedScores.exercise})
+                    {SCORE_LEVELS[computedScores.exercise].label}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
@@ -452,7 +493,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Режим сна */}
+              {/* Режим сна — клик в любое место поля открывает часы */}
               <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -460,18 +501,22 @@ export default function App() {
                     <span className="font-medium">Режим сна</span>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${SCORE_LEVELS[computedScores.sleep].bg} text-slate-950`}>
-                    {SCORE_LEVELS[computedScores.sleep].label} ({computedScores.sleep})
+                    {SCORE_LEVELS[computedScores.sleep].label}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div>
                     <label className="text-slate-400 block mb-1">Время отбоя</label>
-                    <input 
-                      type="time" 
-                      value={formData.sleep?.bedTime ?? ''}
-                      onChange={e => handleFieldChange('sleep', 'bedTime', e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:border-sky-500 outline-none"
-                    />
+                    <div className="relative">
+                      <input 
+                        type="time" 
+                        value={formData.sleep?.bedTime ?? ''}
+                        onChange={e => handleFieldChange('sleep', 'bedTime', e.target.value)}
+                        onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm focus:border-sky-500 outline-none cursor-pointer relative clickable-picker [color-scheme:dark]"
+                      />
+                      <Clock size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                    </div>
                   </div>
                   <div>
                     <label className="text-slate-400 block mb-1">Длительность (часов)</label>
@@ -495,7 +540,7 @@ export default function App() {
                     <span className="font-medium">Питание</span>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${SCORE_LEVELS[computedScores.nutrition].bg} text-slate-950`}>
-                    {SCORE_LEVELS[computedScores.nutrition].label} ({computedScores.nutrition})
+                    {SCORE_LEVELS[computedScores.nutrition].label}
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs">
@@ -542,16 +587,23 @@ export default function App() {
           </div>
         )}
 
-        {/* Экран 2: Сетка */}
+        {/* ===================== ТАБ 2: МЕСЯЧНАЯ СЕТКА ===================== */}
         {activeTab === 'grid' && (
           <div className="space-y-4">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-              <input 
-                type="month"
-                value={currentYearMonth}
-                onChange={e => setCurrentYearMonth(e.target.value)}
-                className="bg-transparent font-semibold text-base focus:outline-none cursor-pointer"
-              />
+              <div className="relative flex items-center gap-2 cursor-pointer group">
+                <Calendar size={18} className="text-sky-400 pointer-events-none" />
+                <span className="font-semibold text-base text-slate-100 group-hover:text-sky-400 transition capitalize pointer-events-none">
+                  {formatDisplayMonth(currentYearMonth)}
+                </span>
+                <input 
+                  type="month"
+                  value={currentYearMonth}
+                  onChange={e => setCurrentYearMonth(e.target.value)}
+                  onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer clickable-picker"
+                />
+              </div>
               <span className="text-xs text-slate-400">Нажмите на ячейку для ввода</span>
             </div>
 
@@ -615,22 +667,35 @@ export default function App() {
           </div>
         )}
 
-        {/* Экран 3: Статистика */}
+        {/* ===================== ТАБ 3: СТАТИСТИКА ===================== */}
         {activeTab === 'stats' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-              <input 
-                type="month"
-                value={currentYearMonth}
-                onChange={e => setCurrentYearMonth(e.target.value)}
-                className="bg-transparent font-semibold text-base focus:outline-none cursor-pointer"
-              />
-              <span className="text-xs text-slate-400">Формула из «Трекер активностей 2»</span>
+              <div className="relative flex items-center gap-2 cursor-pointer group">
+                <Calendar size={18} className="text-sky-400 pointer-events-none" />
+                <span className="font-semibold text-base text-slate-100 group-hover:text-sky-400 transition capitalize pointer-events-none">
+                  {formatDisplayMonth(currentYearMonth)}
+                </span>
+                <input 
+                  type="month"
+                  value={currentYearMonth}
+                  onChange={e => setCurrentYearMonth(e.target.value)}
+                  onClick={(e) => { try { e.target.showPicker(); } catch (err) {} }}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer clickable-picker"
+                />
+              </div>
+
+              {/* Отображение периода расчета */}
+              <span className="text-xs text-slate-400">
+                {monthStatsData.isCurrentMonth
+                  ? `Расчет за ${monthStatsData.effectiveDays} из ${daysInCurrentMonth} дн.`
+                  : `Расчет за ${daysInCurrentMonth} дн.`}
+              </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {HABITS_CONFIG.map(habit => {
-                const stat = monthStats[habit.id];
+                const stat = monthStatsData.stats[habit.id];
                 const Icon = habitIcons[habit.id];
 
                 return (
