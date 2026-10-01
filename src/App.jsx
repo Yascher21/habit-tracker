@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Dumbbell, BookOpen, Brain, Zap, Moon, Utensils, 
   ChevronLeft, ChevronRight, Calendar, BarChart3, 
-  Edit3, Check, Download, Upload, Database, RefreshCw
+  Edit3, Check, Download, Upload, Database, RefreshCw, AlertCircle
 } from 'lucide-react';
 import { 
   HABITS_CONFIG, SCORE_LEVELS, evaluateAllScores, 
@@ -10,7 +10,8 @@ import {
 } from './utils/habitRules';
 import { 
   getLocalRecords, saveLocalRecords, 
-  syncWithCloud, persistDayRecord, subscribeToHabitChanges
+  syncWithCloud, persistDayRecord, subscribeToHabitChanges,
+  testSupabaseConnection
 } from './services/storage';
 import { isSupabaseConfigured } from './lib/supabase';
 
@@ -28,26 +29,28 @@ export default function App() {
   const [records, setRecords] = useState(getLocalRecords());
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [isSyncing, setIsSyncing] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const [statusNotification, setStatusNotification] = useState(null);
 
-  // Функция принудительной синхронизации
   const handleManualSync = useCallback(async () => {
     setIsSyncing(true);
-    const fresh = await syncWithCloud();
-    if (fresh) setRecords(fresh);
+    const { data, error } = await syncWithCloud();
+    if (error) {
+      setErrorMessage(error);
+    } else {
+      setErrorMessage(null);
+      if (data) setRecords(data);
+    }
     setTimeout(() => setIsSyncing(false), 500);
   }, []);
 
-  // Первичная загрузка, подписка на Realtime и фокус вкладки
   useEffect(() => {
     handleManualSync();
 
-    // Подписка на живые изменения из базы данных
     const unsubscribe = subscribeToHabitChanges((updatedRecords) => {
       setRecords(updatedRecords);
     });
 
-    // Авто-проверка при возвращении в приложение / разблокировке
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         handleManualSync();
@@ -102,10 +105,27 @@ export default function App() {
       ...formData,
       scores: computedScores,
     };
-    const newRecords = await persistDayRecord(selectedDate, updatedRecord);
+    const { records: newRecords, error } = await persistDayRecord(selectedDate, updatedRecord);
     setRecords({ ...newRecords });
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2000);
+
+    if (error) {
+      setErrorMessage(error);
+    } else {
+      setErrorMessage(null);
+      setStatusNotification('Успешно сохранено в облако Supabase!');
+      setTimeout(() => setStatusNotification(null), 2500);
+    }
+  };
+
+  const handleRunDiagnostic = async () => {
+    const res = await testSupabaseConnection();
+    if (res.success) {
+      alert(`✅ ${res.message}`);
+      setErrorMessage(null);
+    } else {
+      alert(`❌ Ошибка проверки:\n${res.message}`);
+      setErrorMessage(res.message);
+    }
   };
 
   const daysInCurrentMonth = useMemo(() => {
@@ -143,19 +163,19 @@ export default function App() {
         const imported = JSON.parse(event.target.result);
         saveLocalRecords(imported);
         setRecords(imported);
-        // Загрузка импортированных дней в облако
         for (const [dateStr, rec] of Object.entries(imported)) {
           await persistDayRecord(dateStr, rec);
         }
-        alert('Данные импортированы и сохранены!');
+        alert('Данные импортированы!');
       } catch (err) {
-        alert('Ошибка при чтении файла бэкапа');
+        alert('Ошибка файла');
       }
     };
   };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {/* Шапка */}
       <header className="bg-slate-900/80 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-4 py-3">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -208,7 +228,33 @@ export default function App() {
         </div>
       </header>
 
+      {/* Оповещения об ошибках и успехе */}
+      <div className="max-w-5xl w-full mx-auto px-4 pt-3 space-y-2">
+        {errorMessage && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={16} className="shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <button 
+              onClick={handleRunDiagnostic}
+              className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded font-medium text-[11px] shrink-0"
+            >
+              Проверить БД
+            </button>
+          </div>
+        )}
+
+        {statusNotification && (
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-xs flex items-center gap-2">
+            <Check size={16} className="shrink-0" />
+            <span>{statusNotification}</span>
+          </div>
+        )}
+      </div>
+
       <main className="flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6">
+        {/* Экран 1: Ввод */}
         {activeTab === 'input' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
@@ -475,18 +521,12 @@ export default function App() {
               onClick={handleSaveDay}
               className="w-full py-3.5 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20 active:scale-[0.99] transition"
             >
-              {saveSuccess ? (
-                <>
-                  <Check size={20} className="stroke-[3]" />
-                  <span>Сохранено в облако!</span>
-                </>
-              ) : (
-                <span>Зафиксировать день</span>
-              )}
+              <span>Зафиксировать день</span>
             </button>
           </div>
         )}
 
+        {/* Экран 2: Сетка */}
         {activeTab === 'grid' && (
           <div className="space-y-4">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
@@ -559,6 +599,7 @@ export default function App() {
           </div>
         )}
 
+        {/* Экран 3: Статистика */}
         {activeTab === 'stats' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl">
@@ -623,19 +664,25 @@ export default function App() {
             <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 text-slate-400">
                 <Database size={16} />
-                <span>Хранилище: LocalStorage + Supabase Cloud</span>
+                <span>Supabase Cloud Sync</span>
               </div>
               <div className="flex items-center gap-2">
+                <button 
+                  onClick={handleRunDiagnostic}
+                  className="px-3 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded-xl transition"
+                >
+                  Тест связи с БД
+                </button>
                 <button 
                   onClick={handleExportJSON}
                   className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition"
                 >
                   <Download size={14} />
-                  <span>Скачать бэкап (JSON)</span>
+                  <span>Бэкап (JSON)</span>
                 </button>
                 <label className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition cursor-pointer">
                   <Upload size={14} />
-                  <span>Восстановить</span>
+                  <span>Импорт</span>
                   <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
                 </label>
               </div>

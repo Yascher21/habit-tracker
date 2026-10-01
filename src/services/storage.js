@@ -20,14 +20,19 @@ export function saveLocalRecords(records) {
   }
 }
 
-// Загрузка всех записей из Supabase и слияние с локальными
+// Загрузка из базы с возвратом статуса ошибки
 export async function syncWithCloud() {
   const local = getLocalRecords();
-  if (!isSupabaseConfigured) return local;
+  if (!isSupabaseConfigured) {
+    return { data: local, error: 'Ключи Supabase не настроены в сборке' };
+  }
 
   try {
     const { data, error } = await supabase.from('habit_logs').select('*');
-    if (error) throw error;
+    if (error) {
+      return { data: local, error: error.message };
+    }
+
     if (data) {
       const merged = { ...local };
       data.forEach(row => {
@@ -42,43 +47,81 @@ export async function syncWithCloud() {
         };
       });
       saveLocalRecords(merged);
-      return merged;
+      return { data: merged, error: null };
     }
   } catch (e) {
-    console.warn('Сбой облачной синхронизации:', e.message);
+    return { data: local, error: e.message || 'Ошибка сети' };
   }
-  return local;
+  return { data: local, error: null };
 }
 
-// Сохранение записи
+// Сохранение дня с возвратом ошибки, если Supabase отклонил запись
 export async function persistDayRecord(dateStr, record) {
   const all = getLocalRecords();
   all[dateStr] = record;
   saveLocalRecords(all);
 
-  if (isSupabaseConfigured) {
-    try {
-      const { error } = await supabase.from('habit_logs').upsert({
-        date: dateStr,
-        sport: record.sport || {},
-        reading: record.reading || {},
-        self_dev: record.self_dev || {},
-        exercise: record.exercise || {},
-        sleep: record.sleep || {},
-        nutrition: record.nutrition || {},
-        scores: record.scores || {},
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'date' });
-
-      if (error) console.error('Ошибка отправки в Supabase:', error.message);
-    } catch (e) {
-      console.warn('Офлайн-режим, сохранено только локально:', e);
-    }
+  if (!isSupabaseConfigured) {
+    return { records: all, error: 'Сохранено только локально: ключи базы отсутствуют' };
   }
-  return all;
+
+  try {
+    const payload = {
+      date: dateStr,
+      sport: record.sport || {},
+      reading: record.reading || {},
+      self_dev: record.self_dev || {},
+      exercise: record.exercise || {},
+      sleep: record.sleep || {},
+      nutrition: record.nutrition || {},
+      scores: record.scores || {},
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase
+      .from('habit_logs')
+      .upsert(payload, { onConflict: 'date' });
+
+    if (error) {
+      return { records: all, error: `Supabase отклонил запись: ${error.message}` };
+    }
+
+    return { records: all, error: null };
+  } catch (e) {
+    return { records: all, error: `Сбой сети при отправке: ${e.message}` };
+  }
 }
 
-// Подписка на обновления в реальном времени (WebSockets)
+// Диагностический тест соединения
+export async function testSupabaseConnection() {
+  if (!isSupabaseConfigured) {
+    return { success: false, message: 'Ключи Supabase отсутствуют в сборке (VITE_SUPABASE_URL)' };
+  }
+
+  try {
+    const testDate = '1970-01-01';
+    // Пробуем тестовую запись
+    const { error: insertError } = await supabase.from('habit_logs').upsert({
+      date: testDate,
+      sport: { test: true },
+      scores: { sport: 0 },
+      updated_at: new Date().toISOString(),
+    });
+
+    if (insertError) {
+      return { success: false, message: `Ошибка записи: ${insertError.message}` };
+    }
+
+    // Удаляем тестовую строку
+    await supabase.from('habit_logs').delete().eq('date', testDate);
+
+    return { success: true, message: 'Связь с базой идеальна! Чтение и запись работают.' };
+  } catch (err) {
+    return { success: false, message: `Сбой подключения: ${err.message}` };
+  }
+}
+
+// Realtime подписка
 export function subscribeToHabitChanges(onRemoteChange) {
   if (!isSupabaseConfigured) return () => {};
 
